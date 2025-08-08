@@ -15,7 +15,7 @@
           config = {
             # allow just this package:
             allowUnfreePredicate = pkg:
-              builtins.elem (nixpkgs.lib.getName pkg) [ "zlibrary" ];
+              builtins.elem (nixpkgs.lib.getName pkg) ["zlibrary"];
             # or if you don't care, allow all:
             # allowUnfree = true;
           };
