@@ -8,7 +8,18 @@
     nixpkgs,
   }: let
     systems = ["x86_64-linux" "aarch64-linux"];
-    forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f (import nixpkgs {inherit system;}));
+    forAllSystems = f:
+      nixpkgs.lib.genAttrs systems (system:
+        f (import nixpkgs {
+          inherit system;
+          config = {
+            # allow just this package:
+            allowUnfreePredicate = pkg:
+              builtins.elem (nixpkgs.lib.getName pkg) [ "zlibrary" ];
+            # or if you don't care, allow all:
+            # allowUnfree = true;
+          };
+        }));
   in {
     packages = forAllSystems (pkgs: let
       # Put your deb at ./vendor/zlibrary.deb
