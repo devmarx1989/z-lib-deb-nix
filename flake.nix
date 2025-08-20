@@ -3,10 +3,12 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
-  outputs = { self, nixpkgs }:
-  let
+  outputs = {
+    self,
+    nixpkgs,
+  }: let
     # Adjust if you truly have an aarch64 build of the .deb
-    systems = [ "x86_64-linux" ];
+    systems = ["x86_64-linux"];
 
     forAllSystems = f:
       nixpkgs.lib.genAttrs systems (system:
@@ -15,21 +17,21 @@
           config = {
             # allow just this package:
             allowUnfreePredicate = pkg:
-              builtins.elem (nixpkgs.lib.getName pkg) [ "zlibrary" ];
+              builtins.elem (nixpkgs.lib.getName pkg) ["zlibrary"];
             # or allow all:
             # allowUnfree = true;
           };
         }));
 
     hasDeb = builtins.pathExists ./vendor/zlibrary.deb;
-  in
-  {
+  in {
     ###########################################################################
     ## Packages
     ###########################################################################
-    packages = forAllSystems (pkgs:
-      if hasDeb then
-        let
+    packages = forAllSystems (
+      pkgs:
+        if hasDeb
+        then let
           runtimeLibs = with pkgs; [
             # From Depends of the .deb:
             gtk3
@@ -43,22 +45,38 @@
             util-linux
 
             # Common Electron/Chromium deps for autoPatchelf:
-            glib pango cairo gdk-pixbuf nspr dbus
+            glib
+            pango
+            cairo
+            gdk-pixbuf
+            nspr
+            dbus
             libxkbcommon
-            xorg.libX11 xorg.libXext xorg.libXcursor xorg.libXcomposite
-            xorg.libXdamage xorg.libXfixes xorg.libXi xorg.libXrandr
-            xorg.libXrender xorg.libxcb xorg.libxshmfence
-            libdrm mesa wayland
+            xorg.libX11
+            xorg.libXext
+            xorg.libXcursor
+            xorg.libXcomposite
+            xorg.libXdamage
+            xorg.libXfixes
+            xorg.libXi
+            xorg.libXrandr
+            xorg.libXrender
+            xorg.libxcb
+            xorg.libxshmfence
+            libdrm
+            mesa
+            wayland
 
             # Recommends/typical extras:
             libappindicator-gtk3
-            stdenv.cc.cc.lib expat openssl
+            stdenv.cc.cc.lib
+            expat
+            openssl
 
             # Audio
             alsa-lib
           ];
-        in
-        rec {
+        in rec {
           zlibrary = pkgs.stdenv.mkDerivation {
             pname = "zlibrary";
             version = "2.4.3";
@@ -142,7 +160,7 @@
             meta = with pkgs.lib; {
               description = "Z-Library desktop client (repacked from .deb)";
               homepage = "https://singlelogin.re";
-              license = licenses.unfreeRedistributable // { free = false; };
+              license = licenses.unfreeRedistributable // {free = false;};
               platforms = platforms.linux;
               mainProgram = "zlibrary";
             };
@@ -151,21 +169,21 @@
           # Make your top-level flake happy:
           default = zlibrary;
         }
-      else
-        # No vendored deb → no packages; keeps `flake show` from erroring.
-        {}
+        else
+          # No vendored deb → no packages; keeps `flake show` from erroring.
+          {}
     );
 
     ###########################################################################
     ## Apps (nix run)
     ###########################################################################
-    apps = forAllSystems (pkgs:
-      if hasDeb then
-        let
+    apps = forAllSystems (
+      pkgs:
+        if hasDeb
+        then let
           system = pkgs.stdenv.hostPlatform.system;
           bin = "${self.packages.${system}.zlibrary}/bin";
-        in
-        {
+        in {
           default = {
             type = "app";
             program = "${bin}/zlibrary";
@@ -179,9 +197,7 @@
             program = "${bin}/zlibrary-wayland";
           };
         }
-      else
-        {}
+        else {}
     );
   };
 }
-
