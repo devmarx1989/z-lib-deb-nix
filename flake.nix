@@ -68,6 +68,9 @@
         stdenv.cc.cc.lib
         expat
         openssl
+
+        # 🔊 NEW: provides libasound.so.2
+        alsa-lib
       ];
     in {
       zlibrary = pkgs.stdenv.mkDerivation {
@@ -111,8 +114,18 @@
           makeWrapper "$main" "$out/bin/zlibrary" \
             --set-default ELECTRON_DISABLE_SECURITY_WARNINGS 1 \
             --add-flags "--no-sandbox" \
-            --add-flags "--enable-features=UseOzonePlatform" \
-            --add-flags "--ozone-platform=auto" \
+            --add-flags "--ozone-platform-hint=auto" \
+            --prefix PATH : ${pkgs.xdg-utils}/bin
+
+          # after the main wrapper
+          makeWrapper "$main" "$out/bin/zlibrary-x11" \
+            --add-flags "--no-sandbox" \
+            --add-flags "--ozone-platform-hint=x11" \
+            --prefix PATH : ${pkgs.xdg-utils}/bin
+
+          makeWrapper "$main" "$out/bin/zlibrary-wayland" \
+            --add-flags "--no-sandbox" \
+            --add-flags "--ozone-platform-hint=wayland" \
             --prefix PATH : ${pkgs.xdg-utils}/bin
 
           # Desktop entry → point Exec to our wrapper
