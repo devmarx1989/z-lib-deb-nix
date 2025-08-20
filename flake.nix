@@ -3,11 +3,11 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
-  outputs = {
-    self,
-    nixpkgs,
-  }: let
-    systems = ["x86_64-linux" "aarch64-linux"];
+  outputs = { self, nixpkgs }:
+  let
+    # Adjust if you truly have an aarch64 build of the .deb
+    systems = [ "x86_64-linux" ];
+
     forAllSystems = f:
       nixpkgs.lib.genAttrs systems (system:
         f (import nixpkgs {
@@ -15,159 +15,173 @@
           config = {
             # allow just this package:
             allowUnfreePredicate = pkg:
-              builtins.elem (nixpkgs.lib.getName pkg) ["zlibrary"];
-            # or if you don't care, allow all:
+              builtins.elem (nixpkgs.lib.getName pkg) [ "zlibrary" ];
+            # or allow all:
             # allowUnfree = true;
           };
         }));
-  in {
-    packages = forAllSystems (pkgs: let
-      # Put your deb at ./vendor/zlibrary.deb
-      srcDeb = ./vendor/zlibrary.deb;
 
-      # Debian Depends → Nix packages (plus common Electron bits)
-      runtimeLibs = with pkgs; [
-        # From Depends:
-        gtk3 # libgtk-3-0
-        libnotify # libnotify4
-        nss # libnss3
-        xorg.libXScrnSaver # libxss1
-        xorg.libXtst # libxtst6
-        xdg-utils # xdg-utils
-        at-spi2-core # libatspi2.0-0
-        libsecret # libsecret-1-0
-        util-linux # libuuid1 (libuuid)
+    hasDeb = builtins.pathExists ./vendor/zlibrary.deb;
+  in
+  {
+    ###########################################################################
+    ## Packages
+    ###########################################################################
+    packages = forAllSystems (pkgs:
+      if hasDeb then
+        let
+          runtimeLibs = with pkgs; [
+            # From Depends of the .deb:
+            gtk3
+            libnotify
+            nss
+            xorg.libXScrnSaver
+            xorg.libXtst
+            xdg-utils
+            at-spi2-core
+            libsecret
+            util-linux
 
-        # Usual Electron/Chromium deps that autoPatchelf may need:
-        glib
-        pango
-        cairo
-        gdk-pixbuf
-        nspr
-        dbus
-        libxkbcommon
-        xorg.libX11
-        xorg.libXext
-        xorg.libXcursor
-        xorg.libXcomposite
-        xorg.libXdamage
-        xorg.libXfixes
-        xorg.libXi
-        xorg.libXrandr
-        xorg.libXrender
-        xorg.libxcb
-        xorg.libxshmfence
-        libdrm
-        mesa
-        wayland
+            # Common Electron/Chromium deps for autoPatchelf:
+            glib pango cairo gdk-pixbuf nspr dbus
+            libxkbcommon
+            xorg.libX11 xorg.libXext xorg.libXcursor xorg.libXcomposite
+            xorg.libXdamage xorg.libXfixes xorg.libXi xorg.libXrandr
+            xorg.libXrender xorg.libxcb xorg.libxshmfence
+            libdrm mesa wayland
 
-        # Recommends:
-        libappindicator-gtk3
+            # Recommends/typical extras:
+            libappindicator-gtk3
+            stdenv.cc.cc.lib expat openssl
 
-        # Often harmless & useful:
-        stdenv.cc.cc.lib
-        expat
-        openssl
+            # Audio
+            alsa-lib
+          ];
+        in
+        rec {
+          zlibrary = pkgs.stdenv.mkDerivation {
+            pname = "zlibrary";
+            version = "2.4.3";
 
-        # 🔊 NEW: provides libasound.so.2
-        alsa-lib
-      ];
-    in {
-      zlibrary = pkgs.stdenv.mkDerivation {
-        pname = "zlibrary";
-        version = "2.4.3";
+            src = ./vendor/zlibrary.deb;
+            dontUnpack = true;
 
-        src = srcDeb;
-        dontUnpack = true;
+            nativeBuildInputs = [
+              pkgs.dpkg
+              pkgs.autoPatchelfHook
+              pkgs.makeWrapper
+            ];
 
-        nativeBuildInputs = [
-          pkgs.dpkg
-          pkgs.autoPatchelfHook
-          pkgs.makeWrapper
-        ];
+            buildInputs = runtimeLibs;
 
-        buildInputs = runtimeLibs;
+            installPhase = ''
+              runHook preInstall
 
-        installPhase = ''
-          runHook preInstall
+              mkdir -p $TMP/extracted control
+              dpkg-deb -x $src $TMP/extracted
+              dpkg-deb -e $src control
 
-          mkdir -p $TMP/extracted control
-          dpkg-deb -x $src $TMP/extracted
-          dpkg-deb -e $src control
+              mkdir -p $out
+              cp -r $TMP/extracted/* $out/
 
-          mkdir -p $out
-          cp -r $TMP/extracted/* $out/
+              main="$out/opt/Z-Library/z-library"
+              if [ ! -x "$main" ]; then
+                echo "Main binary not found at $main" >&2
+                exit 1
+              fi
 
-          # Known main binary from your listing:
-          main="$out/opt/Z-Library/z-library"
-          if [ ! -x "$main" ]; then
-            echo "Main binary not found at $main" >&2
-            exit 1
-          fi
+              # Avoid setuid sandbox issues
+              if [ -f "$out/opt/Z-Library/chrome-sandbox" ]; then
+                chmod -x "$out/opt/Z-Library/chrome-sandbox" || true
+              fi
 
-          # Avoid setuid sandbox requirements on Nix:
-          if [ -f "$out/opt/Z-Library/chrome-sandbox" ]; then
-            chmod -x "$out/opt/Z-Library/chrome-sandbox" || true
-          fi
+              mkdir -p $out/bin
+              makeWrapper "$main" "$out/bin/zlibrary" \
+                --set-default ELECTRON_DISABLE_SECURITY_WARNINGS 1 \
+                --add-flags "--no-sandbox" \
+                --add-flags "--ozone-platform-hint=auto" \
+                --prefix PATH : ${pkgs.xdg-utils}/bin
 
-          mkdir -p $out/bin
-          makeWrapper "$main" "$out/bin/zlibrary" \
-            --set-default ELECTRON_DISABLE_SECURITY_WARNINGS 1 \
-            --add-flags "--no-sandbox" \
-            --add-flags "--ozone-platform-hint=auto" \
-            --prefix PATH : ${pkgs.xdg-utils}/bin
+              makeWrapper "$main" "$out/bin/zlibrary-x11" \
+                --add-flags "--no-sandbox" \
+                --add-flags "--ozone-platform-hint=x11" \
+                --prefix PATH : ${pkgs.xdg-utils}/bin
 
-          # after the main wrapper
-          makeWrapper "$main" "$out/bin/zlibrary-x11" \
-            --add-flags "--no-sandbox" \
-            --add-flags "--ozone-platform-hint=x11" \
-            --prefix PATH : ${pkgs.xdg-utils}/bin
+              makeWrapper "$main" "$out/bin/zlibrary-wayland" \
+                --add-flags "--no-sandbox" \
+                --add-flags "--ozone-platform-hint=wayland" \
+                --prefix PATH : ${pkgs.xdg-utils}/bin
 
-          makeWrapper "$main" "$out/bin/zlibrary-wayland" \
-            --add-flags "--no-sandbox" \
-            --add-flags "--ozone-platform-hint=wayland" \
-            --prefix PATH : ${pkgs.xdg-utils}/bin
+              # Fix desktop entries to point to wrapper
+              if [ -d "$out/usr/share/applications" ]; then
+                mkdir -p $out/share/applications
+                for f in $out/usr/share/applications/*.desktop; do
+                  sed -i "s|^Exec=.*|Exec=$out/bin/zlibrary %U|g" "$f" || true
+                  cp "$f" "$out/share/applications/$(basename "$f")"
+                done
+              fi
 
-          # Desktop entry → point Exec to our wrapper
-          if [ -d "$out/usr/share/applications" ]; then
-            mkdir -p $out/share/applications
-            for f in $out/usr/share/applications/*.desktop; do
-              sed -i "s|^Exec=.*|Exec=$out/bin/zlibrary %U|g" "$f" || true
-              cp "$f" "$out/share/applications/$(basename "$f")"
-            done
-          fi
+              # Icons
+              if [ -d "$out/usr/share/icons" ]; then
+                mkdir -p $out/share/icons
+                cp -r $out/usr/share/icons/* $out/share/icons/ || true
+              fi
+              if [ -d "$out/usr/share/pixmaps" ]; then
+                mkdir -p $out/share/pixmaps
+                cp -r $out/usr/share/pixmaps/* $out/share/pixmaps/ || true
+              fi
 
-          # Icons into canonical path
-          if [ -d "$out/usr/share/icons" ]; then
-            mkdir -p $out/share/icons
-            cp -r $out/usr/share/icons/* $out/share/icons/ || true
-          fi
-          if [ -d "$out/usr/share/pixmaps" ]; then
-            mkdir -p $out/share/pixmaps
-            cp -r $out/usr/share/pixmaps/* $out/share/pixmaps/ || true
-          fi
+              runHook postInstall
+            '';
 
-          runHook postInstall
-        '';
+            postInstall = ''
+              echo "===== deb control ====="
+              [ -f control/control ] && cat control/control || true
+            '';
 
-        # Helpful to see control metadata in build log
-        postInstall = ''
-          echo "===== deb control ====="
-          [ -f control/control ] && cat control/control || true
-        '';
+            meta = with pkgs.lib; {
+              description = "Z-Library desktop client (repacked from .deb)";
+              homepage = "https://singlelogin.re";
+              license = licenses.unfreeRedistributable // { free = false; };
+              platforms = platforms.linux;
+              mainProgram = "zlibrary";
+            };
+          };
 
-        meta = with pkgs.lib; {
-          description = "Z-Library desktop client (repacked from .deb)";
-          homepage = "https://singlelogin.re";
-          license = licenses.unfreeRedistributable // {free = false;};
-          platforms = platforms.linux;
-        };
-      };
-    });
+          # Make your top-level flake happy:
+          default = zlibrary;
+        }
+      else
+        # No vendored deb → no packages; keeps `flake show` from erroring.
+        {}
+    );
 
-    apps = nixpkgs.lib.genAttrs systems (system: {
-      type = "app";
-      program = "${self.packages.${system}.zlibrary}/bin/zlibrary";
-    });
+    ###########################################################################
+    ## Apps (nix run)
+    ###########################################################################
+    apps = forAllSystems (pkgs:
+      if hasDeb then
+        let
+          system = pkgs.stdenv.hostPlatform.system;
+          bin = "${self.packages.${system}.zlibrary}/bin";
+        in
+        {
+          default = {
+            type = "app";
+            program = "${bin}/zlibrary";
+          };
+          x11 = {
+            type = "app";
+            program = "${bin}/zlibrary-x11";
+          };
+          wayland = {
+            type = "app";
+            program = "${bin}/zlibrary-wayland";
+          };
+        }
+      else
+        {}
+    );
   };
 }
+
